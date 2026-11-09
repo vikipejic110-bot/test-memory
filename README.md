@@ -1,5 +1,7 @@
 # Rezerviši – ikonice apartmana i precrtane prethodne cijene
 
+[Preuzmi ZIP s JSON datotekom i kodom za Code Snippets](https://github.com/vikipejic110-bot/test-memory/raw/refs/heads/delivery/booking-icons-prices-20261110/Memory-Rezervisi-Code-Snippets.zip)
+
 [Preuzmi datoteku za uvoz u Code Snippets](https://github.com/vikipejic110-bot/test-memory/raw/refs/heads/delivery/booking-icons-prices-20261110/Memory-Rezervisi-ikonice-cijene-Code-Snippets.json)
 
 [Preuzmi kod za ručno lijepljenje](https://github.com/vikipejic110-bot/test-memory/raw/refs/heads/delivery/booking-icons-prices-20261110/memory-booking-room-details-snippet.txt)
