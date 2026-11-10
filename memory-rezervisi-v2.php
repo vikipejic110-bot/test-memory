@@ -1,0 +1,385 @@
+<?php
+// Memory Rezervisi V2: stvarni WebBookingPro strike elementi, svi nazivi i kompaktne ikonice.
+add_action('wp_head', static function () {
+    if (is_admin() || (!is_page('rezervisi') && !is_page(1887))) return;
+
+    $catalog = ['schema' => 1, 'rooms' => []];
+    $icons = [];
+    $endpoint = '';
+    if (class_exists('Memory_Apartment_Icons')) {
+        try {
+            $catalog = Memory_Apartment_Icons::catalog();
+            $icons = Memory_Apartment_Icons::icons();
+            $endpoint = esc_url_raw(rest_url('memory-icons/v1/catalog'));
+            foreach ($catalog['rooms'] as &$room) {
+                $room['title'] = wp_strip_all_tags(get_the_title((int) $room['id']));
+            }
+            unset($room);
+        } catch (Throwable $e) {
+            $catalog = ['schema' => 1, 'rooms' => []];
+            $icons = [];
+            $endpoint = '';
+        }
+    }
+    $config = ['catalog' => $catalog, 'icons' => $icons, 'endpoint' => $endpoint];
+    echo '<script id="memory-booking-room-details-config">window.MemoryBookingRoomDetails='
+        . wp_json_encode($config, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT)
+        . ';</script>';
+    echo <<<'MEMORY_BOOKING_ROOM_DETAILS'
+<style id="memory-booking-room-details-style">
+#wbproot .memory-booking-room-features {
+    margin: 4px 0 12px;
+    padding: 0 6px;
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: auto;
+    clear: both;
+}
+#wbproot .memory-booking-room-features > ul.memory-apartment-icons {
+    --memory-icon-size: 18px;
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 6px 10px;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: 13px;
+    white-space: nowrap;
+}
+#wbproot .memory-booking-room-features > ul > li.memory-icon-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex: 0 0 auto;
+    float: none;
+    width: auto;
+    max-width: 100%;
+    margin: 0;
+    padding: 0;
+    color: #99896f;
+    font-size: inherit;
+    line-height: 1.5;
+}
+#wbproot .memory-booking-room-features > ul > li.memory-icon-people { gap: 3px; flex-wrap: nowrap; }
+#wbproot .memory-booking-room-features > ul > li.memory-icons-break { display: none; }
+#wbproot .memory-booking-room-features svg,
+#wbproot .memory-booking-room-features img {
+    display: inline-block;
+    width: var(--memory-icon-size);
+    height: var(--memory-icon-size);
+    flex: 0 0 var(--memory-icon-size);
+    object-fit: contain;
+    color: #99896f;
+}
+#wbproot .memory-booking-native-capacity { display: none !important; }
+#wbproot .memory-booking-old-price {
+    text-decoration-line: line-through !important;
+    text-decoration-color: currentColor !important;
+    text-decoration-thickness: 1px !important;
+    opacity: .65;
+}
+@media (max-width: 767px) {
+    #wbproot .memory-booking-room-features { padding: 0 4px; margin-bottom: 14px; }
+    #wbproot .memory-booking-room-features > ul.memory-apartment-icons { --memory-icon-size: 14px; gap: 5px 7px; font-size: 11px; }
+}
+</style>
+<script id="memory-booking-room-details-script">
+(() => {
+    'use strict';
+    const config = window.MemoryBookingRoomDetails;
+    if (!config || window.memoryBookingRoomDetailsStarted) return;
+    window.memoryBookingRoomDetailsStarted = true;
+    const featureClass = 'memory-booking-room-features';
+    const nativeClass = 'memory-booking-native-capacity';
+    const priceClass = 'memory-booking-old-price';
+    const ignored = 'script,style,svg,button,input,select,textarea,[contenteditable]';
+    const generic = new Set(['business', 'family', 'lux', 'luxury', 'apt', 'apartment', 'apartments', 'apartman', 'apartmani', 'memory', 'residence', 'spa', 'studio', 'room', 'rooms', 'soba']);
+    const englishLabels = {'area':'Area','bed':'Double bed','sofa':'Sofa / sofa bed','single-bed':'Extra bed','bath':'Bathroom / bathtub','spa':'Wellness','hot-tub':'Hot tub','people':'Capacity','wifi':'Wi-Fi','parking':'Parking','car':'Garage','charging':'EV charging','balcony':'Balcony','kitchen':'Kitchen','coffee':'Coffee / tea','tv':'Smart TV','ac':'Air conditioning','washing':'Washing machine','safe':'Safe','fridge':'Refrigerator','shower':'Shower','crib':'Cot','pet':'Pets','accessible':'Accessibility','image':'Amenity'};
+    const personPath = 'M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z'.replace(/[\s,]+/g, '');
+    let rooms = [], aliases = new Map(), timer = 0, refreshing = false, lastRefresh = 0;
+    let language = savedLanguage();
+    const rows = new Map(), hiddenCapacity = new Set(), markedPrices = new Set();
+
+    function canonical(value) {
+        return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+            .toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/)
+            .filter(word => word && !generic.has(word)).join(' ');
+    }
+
+    function savedLanguage() {
+        try {
+            const saved = JSON.parse(localStorage.getItem('__GT_TRANSLATE_LANGS'));
+            if (['sr', 'en'].includes(saved?.tgtLang)) return saved.tgtLang;
+        } catch (_) {}
+        try {
+            const cookie = document.cookie.match(/(?:^|;\s*)googtrans=([^;]*)/);
+            if (cookie && decodeURIComponent(cookie[1]).split('/').pop() === 'en') return 'en';
+        } catch (_) {}
+        return 'sr';
+    }
+
+    function index(catalog) {
+        if (catalog?.schema !== 1 || !Array.isArray(catalog.rooms)) return false;
+        const titles = new Map(rooms.map(room => [String(room.id), room.title]));
+        rooms = catalog.rooms.filter(room => room && room.id != null && room.layout && Array.isArray(room.layout.items))
+            .map(room => ({...room, title: room.title || titles.get(String(room.id)) || ''}));
+        aliases = new Map();
+        for (const room of rooms) {
+            for (const value of [room.slug, room.title]) {
+                const key = canonical(value);
+                if (!key) continue;
+                const previous = aliases.get(key);
+                aliases.set(key, previous === undefined || String(previous?.id) === String(room.id) ? room : null);
+            }
+        }
+        return true;
+    }
+
+    function roomFor(title, card) {
+        const key = canonical(title.querySelector(':scope > span')?.textContent);
+        if (aliases.has(key)) return aliases.get(key);
+        // Booking prefixes differ from WordPress titles. Accept a distinctive
+        // whole apartment name only when it identifies exactly one room.
+        const named = new Set();
+        for (const [alias, room] of aliases) {
+            if (room && /[a-z]/.test(alias) && (' ' + key + ' ').includes(' ' + alias + ' ')) named.add(room);
+        }
+        if (named.size > 1) return null;
+        if (named.size === 1) return [...named][0];
+        const candidates = new Set();
+        for (const link of card.querySelectorAll('a[href]')) {
+            try {
+                const url = new URL(link.href, location.href);
+                if (url.origin !== location.origin) continue;
+                for (const room of rooms) {
+                    const own = new URL(room.url, location.href);
+                    if (own.origin === url.origin && own.pathname.replace(/\/$/, '') === url.pathname.replace(/\/$/, '')) candidates.add(room);
+                }
+            } catch (_) {}
+        }
+        return candidates.size === 1 ? [...candidates][0] : null;
+    }
+
+    function restoreCapacity() {
+        for (const svg of hiddenCapacity) svg.classList.remove(nativeClass);
+        hiddenCapacity.clear();
+    }
+
+    function hideNativeCapacity(title) {
+        for (const svg of title.parentElement.querySelectorAll('svg')) {
+            if (svg.closest('button,a,[role="button"],.' + featureClass)) continue;
+            const label = svg.closest('.wbpTitle');
+            if (label !== title && label?.parentElement !== title.parentElement) continue;
+            const testId = svg.getAttribute('data-testid') || '';
+            const path = svg.querySelector('path')?.getAttribute('d')?.replace(/[\s,]+/g, '');
+            if (!/^Person(?:Outline|Outlined|Rounded|Sharp|TwoTone)?Icon$/i.test(testId) && path !== personPath) continue;
+            svg.classList.add(nativeClass);
+            hiddenCapacity.add(svg);
+            if (label !== title && !label.textContent.trim() && [...label.querySelectorAll('svg')].every(icon => icon.classList.contains(nativeClass))) {
+                label.classList.add(nativeClass);
+                hiddenCapacity.add(label);
+            }
+        }
+    }
+
+    function features(root) {
+        restoreCapacity();
+        const visited = new Set();
+        const renderer = window.MemoryIconRenderer;
+        if (!renderer || !config.icons) return cleanRows(visited);
+        for (const span of root.querySelectorAll('.wbpTitle > span:first-child')) {
+            const title = span.parentElement;
+            const card = title.closest('.MuiCard-root');
+            if (!card || visited.has(title)) continue;
+            const room = roomFor(title, card);
+            if (!room?.layout.enabled || !room.layout.items.length) continue;
+            visited.add(title);
+            let wrapper = rows.get(title);
+            if (!wrapper) {
+                wrapper = document.createElement('div');
+                wrapper.className = featureClass + ' notranslate';
+                wrapper.setAttribute('translate', 'no');
+                wrapper.append(document.createElement('ul'));
+                rows.set(title, wrapper);
+            }
+            if (title.nextElementSibling !== wrapper) title.after(wrapper);
+            const signature = JSON.stringify([room.id, room.layout.items, language]);
+            if (wrapper.dataset.signature !== signature) {
+                const list = wrapper.firstElementChild;
+                const items = [...room.layout.items.filter(row => row.icon === 'people'), ...room.layout.items.filter(row => row.icon !== 'people')]
+                    .map(row => {
+                        const item = {...row};
+                        if (language === 'en' && (!item.label || item.label === config.icons[item.icon]?.label)) item.label = englishLabels[item.icon] || item.label;
+                        return item;
+                    });
+                renderer.render(list, items, config.icons);
+                list.setAttribute('aria-label', language === 'en' ? 'Apartment amenities and capacity' : 'Sadržaji i kapacitet apartmana');
+                let group = 0;
+                const people = items.filter(row => row.icon === 'people' && config.icons[row.icon]);
+                for (const li of list.querySelectorAll('.memory-icon-people')) {
+                    const row = people[group++];
+                    if (!row) continue;
+                    const adults = Math.min(8, Math.max(0, Number(row.adults) || 0));
+                    const children = Math.min(8, Math.max(0, Number(row.children) || 0));
+                    const label = language === 'en' ? `Capacity: ${adults} adults + ${children} children` : `Kapacitet: odrasli ${adults} + djeca ${children}`;
+                    li.title = label;
+                    li.setAttribute('aria-label', label);
+                }
+                wrapper.dataset.signature = signature;
+            }
+            if (room.layout.items.some(row => row.icon === 'people')) hideNativeCapacity(title);
+        }
+        cleanRows(visited);
+    }
+
+    function cleanRows(visited) {
+        for (const [title, wrapper] of rows) {
+            if (!visited.has(title) || !title.isConnected) {
+                wrapper.remove();
+                rows.delete(title);
+            }
+        }
+    }
+
+    function money(text) {
+        const value = String(text || '').normalize('NFKC').replace(/\s+/g, ' ').trim();
+        const match = value.match(/^(?:(BAM|KM|EUR|USD|GBP|€|\$|£)\s*([0-9][0-9., ]*)|([0-9][0-9., ]*)\s*(BAM|KM|EUR|USD|GBP|€|\$|£))$/i);
+        if (!match) return null;
+        let raw = (match[2] || match[3]).trim();
+        const currency = (match[1] || match[4]).toUpperCase().replace('KM', 'BAM').replace('€', 'EUR').replace('$', 'USD').replace('£', 'GBP');
+        const decimal = raw.match(/[.,]([0-9]{2})$/);
+        const cents = decimal ? Number(decimal[1]) : 0;
+        if (decimal) raw = raw.slice(0, -3);
+        if (!/^(?:[0-9]+|[0-9]{1,3}(?:[., ][0-9]{3})+)$/.test(raw)) return null;
+        const total = Number(raw.replace(/[., ]/g, '')) * 100 + cents;
+        return Number.isSafeInteger(total) && total > 0 ? {amount: total, currency} : null;
+    }
+
+    function prices(root) {
+        const found = new Map();
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        let text;
+        while ((text = walker.nextNode())) {
+            if (!text.nodeValue.trim() || text.parentElement?.closest(ignored + ',.' + featureClass + ',.wbpTitle')) continue;
+            let el = text.parentElement;
+            for (let depth = 0; el && el !== root && depth < 4; depth++, el = el.parentElement) {
+                if (el.querySelector('button,a,input,select,textarea')) break;
+                const parsed = money(el.textContent);
+                if (parsed) { found.set(el, {el, ...parsed}); break; }
+            }
+        }
+        return [...found.values()].filter(price => ![...found.keys()].some(other => other !== price.el && price.el.contains(other)));
+    }
+
+    function discounts(root) {
+        const found = [];
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        let text;
+        while ((text = walker.nextNode())) {
+            if (text.parentElement?.closest(ignored + ',.' + featureClass)) continue;
+            const match = text.nodeValue.trim().match(/^[-−–]\s*([0-9]{1,2}(?:[.,][0-9]+)?)\s*%$/);
+            if (match && Number(match[1].replace(',', '.')) > 0) found.push({el: text.parentElement, percent: Number(match[1].replace(',', '.'))});
+        }
+        return found;
+    }
+
+    function commonPriceColumn(a, b, boundary) {
+        let column = a.parentElement;
+        while (column && column !== boundary && !column.contains(b)) column = column.parentElement;
+        return column && column !== boundary && !column.querySelector('button,a,input,select,textarea,.wbpTitle');
+    }
+
+    function discountPrices(root) {
+        const allPrices = prices(root), badges = discounts(root), next = new Set();
+        // WebBookingPro already marks its previous amount as <strike>. The
+        // theme resets that element's decoration. Preserve the engine's own
+        // meaning instead of trying to infer this pair from surrounding text.
+        for (const old of root.querySelectorAll('.wbpTitle > strike,.wbpTitle > s,.wbpTitle > del')) {
+            const previous = money(old.textContent);
+            const label = old.parentElement;
+            if (!previous || label.querySelectorAll('strike,s,del').length !== 1) continue;
+            const clone = label.cloneNode(true);
+            for (const removed of clone.querySelectorAll('strike,s,del')) removed.remove();
+            const current = money(clone.textContent);
+            if (current && previous.currency === current.currency && previous.amount > current.amount) next.add(old);
+        }
+        for (const badge of badges) {
+            const card = badge.el.closest('.MuiCard-root');
+            if (!card) continue;
+            let block = badge.el;
+            while (block && block !== root) {
+                const pair = allPrices.filter(price => block.contains(price.el));
+                if (pair.length > 2) break;
+                if (pair.length === 2) {
+                    const [low, high] = [...pair].sort((a, b) => a.amount - b.amount);
+                    const percent = (high.amount - low.amount) / high.amount * 100;
+                    const uniqueBadge = badges.filter(other => block.contains(other.el)).length === 1;
+                    if (uniqueBadge && low.currency === high.currency && high.amount > low.amount && Math.abs(percent - badge.percent) <= 2 && commonPriceColumn(low.el, high.el, block)) next.add(high.el);
+                    break;
+                }
+                if (block === card) break;
+                block = block.parentElement;
+            }
+        }
+        for (const el of markedPrices) if (!next.has(el)) el.classList.remove(priceClass);
+        for (const el of next) el.classList.add(priceClass);
+        markedPrices.clear();
+        for (const el of next) markedPrices.add(el);
+    }
+
+    function apply() {
+        timer = 0;
+        const root = document.getElementById('wbproot');
+        if (!root || !root.querySelector('.wbpSearchBox')) {
+            restoreCapacity();
+            cleanRows(new Set());
+            for (const el of markedPrices) el.classList.remove(priceClass);
+            markedPrices.clear();
+            return;
+        }
+        features(root);
+        discountPrices(root);
+    }
+
+    function schedule() {
+        if (!timer) timer = setTimeout(apply, 90);
+    }
+
+    async function refresh() {
+        if (!config.endpoint || refreshing || document.hidden || Date.now() - lastRefresh < 30000) return;
+        refreshing = true;
+        lastRefresh = Date.now();
+        try {
+            const response = await fetch(config.endpoint, {credentials: 'same-origin', cache: 'no-store'});
+            if (response.ok && index(await response.json())) schedule();
+        } catch (_) { /* Keep the catalogue included with the page. */ }
+        finally { refreshing = false; }
+    }
+
+    function start() {
+        index(config.catalog);
+        new MutationObserver(records => {
+            if (records.some(record => {
+                const parent = record.target.nodeType === 1 ? record.target : record.target.parentElement;
+                if (parent?.closest('.' + featureClass)) return false;
+                return parent?.closest('#wbproot') || [...record.addedNodes].some(node => node.nodeType === 1 && (node.id === 'wbproot' || node.querySelector('#wbproot')));
+            })) schedule();
+        }).observe(document.body, {childList: true, subtree: true, characterData: true});
+        schedule();
+        refresh();
+    }
+    document.addEventListener('click', event => {
+        const choice = event.target.closest?.('a[data-gt-lang]')?.getAttribute('data-gt-lang');
+        if (choice === 'sr' || choice === 'en') { language = choice; schedule(); }
+    }, true);
+    window.addEventListener('storage', () => { language = savedLanguage(); schedule(); });
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, {once: true});
+    else start();
+})();
+</script>
+MEMORY_BOOKING_ROOM_DETAILS;
+}, 3);
